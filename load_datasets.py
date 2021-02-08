@@ -1,3 +1,4 @@
+import torch
 import torchvision.transforms as transforms
 from torchvision import datasets
 
@@ -24,7 +25,7 @@ class LoadDataset():
                                               num_workers=2, shuffle=True, drop_last=True)
     
     testset = datasets.CIFAR10(root=root, train=False, download=True,
-                               transform=transforms.Compose(transformation_list))
+                               transform=transforms.Compose(self.transformation_list))
     
     testLoader = torch.utils.data.DataLoader(testset, batch_size=self.batch_size_test, 
     	num_workers=2, shuffle=False)
