@@ -2,9 +2,10 @@ import torchvision.transforms as transforms
 from torchvision import datasets
 
 class LoadDataset():
-  def __init__(self, input_dim, batch_size):
+  def __init__(self, input_dim, batch_size_train, batch_size_test):
     self.input_dim = input_dim
-    self.batch_size = batch_size
+    self.batch_size_train = batch_size_train
+    self.batch_size_test = batch_size_test
 
     self.transformation_list = [transforms.Resize(256),
                            transforms.CenterCrop(self.input_dim),
@@ -19,13 +20,14 @@ class LoadDataset():
     trainset = datasets.CIFAR10(root=root, train=True, download=True,
                                 transform=transforms.Compose(self.transformation_list))
     
-    trainLoader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, 
+    trainLoader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size_train, 
                                               num_workers=2, shuffle=True, drop_last=True)
     
     testset = datasets.CIFAR10(root=root, train=False, download=True,
                                transform=transforms.Compose(transformation_list))
     
-    testLoader = torch.utils.data.DataLoader(testset, batch_size=self.batch_size, num_workers=2, shuffle=False)
+    testLoader = torch.utils.data.DataLoader(testset, batch_size=self.batch_size_test, 
+    	num_workers=2, shuffle=False)
     
     return trainLoader, testLoader
 
@@ -36,13 +38,14 @@ class LoadDataset():
     trainset = datasets.CIFAR100(root=root, train=True, download=True,
                                 transform=transforms.Compose(self.transformation_list))
     
-    trainLoader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, 
+    trainLoader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size_train, 
                                               num_workers=2, shuffle=True, drop_last=True)
     
     testset = datasets.CIFAR100(root=root, train=False, download=True,
                                transform=transforms.Compose(self.transformation_list))
     
-    testLoader = torch.utils.data.DataLoader(testset, batch_size=self.batch_size, num_workers=2, shuffle=False)
+    testLoader = torch.utils.data.DataLoader(testset, batch_size=self.batch_size_test, 
+    	num_workers=2, shuffle=False)
     
     return trainLoader, testLoader
 
