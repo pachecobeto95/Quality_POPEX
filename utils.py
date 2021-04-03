@@ -1,146 +1,200 @@
-from pthflops import count_ops
 import torch.nn as nn
 import torch
-import pandas as pd
-import numpy as np
 
-def save_model(model, best,n_branches, optimizer, savePath):
-  save_dict = {
-      'epoch': best["epoch"],
-      'model_state_dict': model.state_dict(),
-      'optimizer_state_dict': optimizer.state_dict(),
-      "val_acc": best['val_acc'],
-      }
-  for i in range(n_branches+1):
-    save_dict["train_acc_%s"%(i+1)] = best["train_acc_%s"%(i+1)]
-    save_dict["val_acc_%s"%(i+1)] = best["val_acc_%s"%(i+1)]    
-  
-  torch.save(save_dict, savePath)
+class ConvBasic(nn.Module):
+    def __init__(self, nIn, nOut, kernel=3, stride=1,
+                 padding=1):
+        super(ConvBasic, self).__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(nIn, nOut, kernel_size=kernel, stride=stride,
+                      padding=padding, bias=False),
+            nn.BatchNorm2d(nOut),
+            nn.ReLU(True)
+        )
 
-def save_history(df, result, savePath):
-  df = df.append(result, ignore_index=True)
-  df.to_csv(savePath)
+    def forward(self, x):
+        return self.net(x)
 
-def set_parameter_requires_grad(model, feature_extraction):
-  if (feature_extraction):
-    for param in model.parameters():
-      param.requires_grad  = False
+def conv_bn(inp, oup, stride):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
+        nn.BatchNorm2d(oup),
+        nn.ReLU6(inplace=True)
+    )
 
-  return model
-
-def countFlop(model, input_size):
-  x = torch.rand(1, input_size[0], input_size[1], input_size[2])
-  ops, all_data = count_ops(model, x, print_readable=False, verbose=True)
-  flop_idx_dict = {i: 0 for i in range(len(all_data))}
-  flop_layer_dict = {}
-
-  total_flop = 0
-  for i, layer in enumerate(all_data):
-    total_flop += layer[1]/ops
-    flop_idx_dict[i] = total_flop
-    flop_layer_dict[layer[0].split("/")[-2]] = total_flop
-
-  return flop_idx_dict, flop_layer_dict
-
-class Flatten(nn.Module):
-  def __init__(self):
-    super(Flatten, self).__init__()
-  def forward(self, x):
-    return x.view(x.size(0), -1)
+def conv_bn(inp, oup, stride):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
+        nn.BatchNorm2d(oup),
+        nn.ReLU6(inplace=True)
+    )
 
 
-def trainBranches(model, train_loader, optimizer, epoch, device, n_branches, weight_loss):
+def conv_1x1_bn(inp, oup):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 1, 1, 0, bias=False),
+        nn.BatchNorm2d(oup),
+        nn.ReLU6(inplace=True)
+    )
+
+
+object_categories = ['aeroplane', 'bicycle', 'bird', 'boat',
+'bottle', 'bus', 'car', 'cat', 'chair',
+'cow', 'diningtable', 'dog', 'horse',
+'motorbike', 'person', 'pottedplant',
+'sheep', 'sofa', 'train', 'tvmonitor']
+
+mean=[0.457342265910642, 0.4387686270106377, 0.4073427106250871]
+std=[0.26753769276329037, 0.2638145880487105, 0.2776826934044154]
+
+
+def get_model(model_name, pretrained, dataset, device):
+    model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    }
+
+    models_dict = {"resnet18": models.resnet18(), 
+    "resnet34": models.resnet34(), 
+    "resnet50": models.resnet50(), 
+    "vgg16": models.vgg16(),
+    "alexnet": models.alexnet(),
+    "mobilenet": models.mobilenet_v2()}
+
+    dataset_dict = {"imagenet": 1000, "caltech":258,
+    "pascal": 20}
+
+    model = models_dict[model_name]
+
+    if ("resnet" in model_name):
+        model.avgpool = torch.nn.AdaptiveAvgPool2d(1)
+        model.load_state_dict(model_zoo.load_url(model_urls[model_name]))
+        model.fc = torch.nn.Linear(model.fc.in_features, dataset_dict[dataset])
+    elif (model_name == "alexnet"):
+        model.load_state_dict(model_zoo.load_url(model_urls[model_name]))
+        model.classifier[6] = nn.Linear(model.classifier[6].in_features, dataset_dict[dataset])
+
+    elif (model_name == "mobilenet"):
+        model = torch.hub.load('pytorch/vision:v0.6.0', 'mobilenet_v2', pretrained=pretrained)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, dataset_dict[dataset])
+
+
+    model = model.to(device)
+    return model
+
+
+def encode_labels(target):
+    """
+    Encode multiple labels using 1/0 encoding 
+    Args:
+        target: xml tree file
+    Returns:
+        torch tensor encoding labels as 1/0 vector
+    """
+    ls = target['annotation']['object']
+
+    j = []
+    if type(ls) == dict:
+        if int(ls['difficult']) == 0:
+            j.append(object_categories.index(ls['name']))
+    else:
+        for i in range(len(ls)):
+            if int(ls[i]['difficult']) == 0:
+                j.append(object_categories.index(ls[i]['name']))
+
+    k = np.zeros(len(object_categories))
+    k[j] = 1
+    return torch.from_numpy(k)
+
+
+class MapDataset(torch.utils.data.Dataset):
+  def __init__(self, dataset, transformation):
+    self.dataset = dataset
+    self.transformation = transformation
+
+  def __getitem__(self, index):
+    x = self.transformation(self.dataset[index][0])
+    y = self.dataset[index][1]
+    return x, y
+
+  def __len__(self):
+    return len(self.dataset)
+
+
+class MapDataset(torch.utils.data.Dataset):
+  def __init__(self, dataset, transformation):
+    self.dataset = dataset
+    self.transformation = transformation
+
+  def __getitem__(self, index):
+    x = self.transformation(self.dataset[index][0])
+    y = self.dataset[index][1]
+    return x, y
+
+  def __len__(self):
+    return len(self.dataset)
+
+
+
+
+
+
+
+
+
+def make_divisible(x, divisible_by=8):
+    import numpy as np
+    return int(np.ceil(x * 1. / divisible_by) * divisible_by)
+
+
+class ExitBlock(nn.Module):
   """
-  trains the branchynet model.
-
-  * model:         branchynet model
-  * train_loader:  training dataset, containing input images and its labels
-  * optimizer:     optimizer operator to adjust the model parameters. 
+  This class defines the Early Exit, which allows to finish the inference at the middle layers when
+  the classification confidence achieves a predefined threshold
   """
-  losses = []
-  model.to(device)
-  model.train()
-  acc_train = [0]*(n_branches + 1)
-  batch = {'train_acc_%s'%(i): [] for i in range(1, n_branches+1+1)}
+  def __init__(self, n_classes, input_shape, exit_type, device):
+    super(ExitBlock, self).__init__()
+    _, channel, width, height = input_shape
+    """
+    This creates a random input sample whose goal is to find out the input shape after each layer.
+    In fact, this finds out the input shape that arrives in the early exits, to build a suitable branch.
 
-  loss_fn = nn.CrossEntropyLoss()
-  for i, (data, target) in enumerate(train_loader):
-    data, target = data.to(device), target.to(device, dtype=torch.int64)
-    optimizer.zero_grad()
+    Arguments are
 
-    pred_list, conf_list, class_list = model(data)
-    loss = 0 
-    for i, (pred, conf, inf_label) in enumerate(zip(pred_list, conf_list, class_list)):
-      loss += weight_loss[i]*loss_fn(pred, target)
-      acc_train[i] = inf_label.eq(target.view_as(inf_label)).sum().item()/data.size(0)
-      batch["train_acc_%s"%(i+1)].append(acc_train[i])
+    nIn:          (int)    input channel of the data that arrives into the given branch.
+    n_classes:    (int)    number of the classes
+    input_shape:  (tuple)  input shape that arrives into the given branch
+    exit_type:    (str)    this argument define the exit type: exit with conv layer or not, just fc layer
+    dataset_name: (str)   defines tha dataset used to train and evaluate the branchyNet
+     """
+
+    self.expansion = 1
+    self.device = device
+    self.layers = nn.ModuleList()
+
+    # creates a random input sample to find out input shape in order to define the model architecture.
+    x = torch.rand(1, channel, width, height).to(device)
+    
+    self.conv = nn.Sequential(
+        ConvBasic(channel, channel, kernel=3, stride=2, padding=1),
+        nn.AvgPool2d(2),)
+    
+    #gives the opportunity to add conv layers in the branch, or only fully-connected layers
+    if (exit_type == "conv"):
+      self.layers.append(self.conv)
+    else:
+      self.layers.append(nn.AdaptiveAvgPool2d(2))
       
-    losses.append(float(loss.item()))
-    loss.backward()
-    optimizer.step()
+    feature_shape = nn.Sequential(*self.layers).to(device)(x).shape
+    
+    total_neurons = feature_shape[1]*feature_shape[2]*feature_shape[3] # computes the input neurons of the fc layer 
+    self.layers = self.layers.to(device)
+    self.classifier = nn.Linear(total_neurons , n_classes).to(device) # finally creates 
+    
+  def forward(self, x):
+    for layer in self.layers:
+      x = layer(x)
+    x = x.view(x.size(0), -1)
 
-  result = {'train_loss': round(np.mean(losses), 4)}
-
-  print('Train avg loss: {:.4f}'.format(result['train_loss']))
-
-  info = ""
-  for i, (key, value) in enumerate(batch.items()):
-    result[key] = round(np.mean(batch["train_acc_%s"%(i+1)]), 4)
-    info += "Acc Branch %s: %s "%(i+1, round(np.mean(batch["train_acc_%s"%(i+1)]), 4))
-  print(info)
-  return result
-
-
-def evalBranches(model, val_loader, epoch, n_branches, device, ptar):
-  """
-  Validates the model.
-
-  Arguments are
-  * model                  defines the model evaluated
-  * eval_loader            evaluation dataset, containing input images and its labels   
-  * epoch             (int) number of the current epoch.
-  This validates the model and prints the results of each epochs.
-  Finally, it returns average accuracy, loss.
-  """
-  loss_fn = nn.CrossEntropyLoss()
-  exit_points = np.zeros(n_branches + 1)
-  correct_branches = np.zeros(n_branches + 1)
-  correct = 0
-  model.to(device)
-  model.eval()
-  val_loss_list = []
-  result = {}
-  with torch.no_grad():
-    for i, (data, target) in enumerate(val_loader):
-      data, target = data.to(device), target.to(device, dtype=torch.int64)
-      pred, infered_conf, infered_class, exit_idx = model(data, p_tar=ptar, train=False)
-      exit_points[exit_idx] += 1
-      total_samples = data.size(0)
-      #correct += infered_class.eq(target.view_as(infered_class)).sum().item()
-      correct_branches[exit_idx] += infered_class.eq(target.view_as(infered_class)).sum().item()
-      loss = loss_fn(pred, target)
-      val_loss_list.append(loss.item())
-
-  acc_branches = correct_branches/exit_points
-  acc = sum(correct_branches)/sum(exit_points)
-  result['val_loss'] = round(np.mean(val_loss_list), 4)
-  result['val_acc'] = acc
-  for i in range(n_branches+1):
-     result["val_acc_%s"%(i+1)] = acc_branches[i]
-  
-  return result
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return self.classifier(x)
